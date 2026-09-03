@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="Underwear Chess.vcxproj" />
+  <Project Path="Underwear Chess.vcxproj" Id="86170cc1-6698-4e56-ba98-41d910c97fb9" />
 </Solution>

@@ -4,7 +4,7 @@
 #include <cmath>
 
 // ============================================================
-// UNDERWEAR CHESS v0.3
+// UNDERWEAR CHESS v1.0
 // Kaiju Interactive
 //
 // PAWN   = Briefs
@@ -14,18 +14,12 @@
 // QUEEN  = Boxers
 // KING   = Boxer Briefs
 //
-// Current rules:
-// - Normal piece movement
-// - Captures
-// - Alternating turns
-// - Pawn double move
-// - Automatic queen promotion
-// - Capture the King = Victory
-//
-// Coming later:
+// FULL RULES:
+// - Legal movement
 // - Check
 // - Checkmate
 // - Stalemate
+// - Self-check prevention
 // - Castling
 // - En passant
 // - Promotion choice
@@ -116,19 +110,70 @@ int moveNumber = 1;
 std::string lastMove = "Game started";
 
 bool gameOver = false;
+bool stalemate = false;
+
 PieceColor winner = NONE;
 
+// ------------------------------------------------------------
+// EN PASSANT
+//
+// This stores the square BEHIND a pawn that just moved two
+// squares. An enemy pawn may capture into this square on the
+// immediately following move.
+// ------------------------------------------------------------
+
+int enPassantRow = -1;
+int enPassantCol = -1;
+
+// ------------------------------------------------------------
+// PROMOTION
+// ------------------------------------------------------------
+
+bool promotionPending = false;
+
+int promotionRow = -1;
+int promotionCol = -1;
+
 // ============================================================
-// HELPERS
+// BASIC HELPERS
 // ============================================================
 
 bool IsInsideBoard(int row, int col)
 {
-    return row >= 0 &&
+    return
+        row >= 0 &&
         row < BOARD_SIZE &&
         col >= 0 &&
         col < BOARD_SIZE;
 }
+
+// ------------------------------------------------------------
+
+PieceColor OppositeColor(PieceColor color)
+{
+    if (color == WHITE_SIDE)
+        return BLACK_SIDE;
+
+    if (color == BLACK_SIDE)
+        return WHITE_SIDE;
+
+    return NONE;
+}
+
+// ------------------------------------------------------------
+
+const char* GetColorName(PieceColor color)
+{
+    if (color == WHITE_SIDE)
+        return "WHITE";
+
+    if (color == BLACK_SIDE)
+        return "BLACK";
+
+    return "";
+}
+
+// ------------------------------------------------------------
 
 std::string GetPieceName(PieceType type)
 {
@@ -157,6 +202,8 @@ std::string GetPieceName(PieceType type)
     }
 }
 
+// ------------------------------------------------------------
+
 std::string GetChessPieceName(PieceType type)
 {
     switch (type)
@@ -183,6 +230,8 @@ std::string GetChessPieceName(PieceType type)
         return "Empty";
     }
 }
+
+// ------------------------------------------------------------
 
 char GetPieceLetter(PieceType type)
 {
@@ -211,6 +260,8 @@ char GetPieceLetter(PieceType type)
     }
 }
 
+// ------------------------------------------------------------
+
 std::string GetSquareName(int row, int col)
 {
     char file = 'a' + col;
@@ -222,17 +273,6 @@ std::string GetSquareName(int row, int col)
     result += rank;
 
     return result;
-}
-
-const char* GetColorName(PieceColor color)
-{
-    if (color == WHITE_SIDE)
-        return "WHITE";
-
-    if (color == BLACK_SIDE)
-        return "BLACK";
-
-    return "";
 }
 
 // ============================================================
@@ -250,6 +290,8 @@ void ClearBoard()
     }
 }
 
+// ------------------------------------------------------------
+
 void SetupBackRank(int row, PieceColor color)
 {
     board[row][0] = { ROOK, color, false };
@@ -262,11 +304,12 @@ void SetupBackRank(int row, PieceColor color)
     board[row][7] = { ROOK, color, false };
 }
 
+// ------------------------------------------------------------
+
 void ResetGame()
 {
     ClearBoard();
 
-    // Black
     SetupBackRank(0, BLACK_SIDE);
 
     for (int col = 0; col < BOARD_SIZE; col++)
@@ -279,7 +322,6 @@ void ResetGame()
         };
     }
 
-    // White
     SetupBackRank(7, WHITE_SIDE);
 
     for (int col = 0; col < BOARD_SIZE; col++)
@@ -306,7 +348,16 @@ void ResetGame()
     lastMove = "Game started";
 
     gameOver = false;
+    stalemate = false;
+
     winner = NONE;
+
+    enPassantRow = -1;
+    enPassantCol = -1;
+
+    promotionPending = false;
+    promotionRow = -1;
+    promotionCol = -1;
 }
 
 // ============================================================
@@ -351,10 +402,316 @@ bool IsPathClear(
 }
 
 // ============================================================
-// PAWN
+// ATTACK DETECTION
 // ============================================================
 
-bool IsPawnMoveLegal(
+bool PieceAttacksSquare(
+    int startRow,
+    int startCol,
+    int targetRow,
+    int targetCol)
+{
+    Piece piece =
+        board[startRow][startCol];
+
+    if (piece.type == EMPTY)
+    {
+        return false;
+    }
+
+    int rowDifference =
+        targetRow - startRow;
+
+    int colDifference =
+        targetCol - startCol;
+
+    int absRow =
+        std::abs(rowDifference);
+
+    int absCol =
+        std::abs(colDifference);
+
+    switch (piece.type)
+    {
+    case PAWN:
+    {
+        int direction =
+            piece.color == WHITE_SIDE
+            ? -1
+            : 1;
+
+        return
+            rowDifference == direction &&
+            absCol == 1;
+    }
+
+    case KNIGHT:
+
+        return
+            (absRow == 2 && absCol == 1)
+            ||
+            (absRow == 1 && absCol == 2);
+
+    case BISHOP:
+
+        if (absRow != absCol)
+            return false;
+
+        return IsPathClear(
+            startRow,
+            startCol,
+            targetRow,
+            targetCol
+        );
+
+    case ROOK:
+
+        if (startRow != targetRow &&
+            startCol != targetCol)
+        {
+            return false;
+        }
+
+        return IsPathClear(
+            startRow,
+            startCol,
+            targetRow,
+            targetCol
+        );
+
+    case QUEEN:
+    {
+        bool straight =
+            startRow == targetRow ||
+            startCol == targetCol;
+
+        bool diagonal =
+            absRow == absCol;
+
+        if (!straight && !diagonal)
+        {
+            return false;
+        }
+
+        return IsPathClear(
+            startRow,
+            startCol,
+            targetRow,
+            targetCol
+        );
+    }
+
+    case KING:
+
+        return
+            absRow <= 1 &&
+            absCol <= 1 &&
+            !(absRow == 0 &&
+                absCol == 0);
+
+    default:
+
+        return false;
+    }
+}
+
+// ------------------------------------------------------------
+
+bool IsSquareAttacked(
+    int row,
+    int col,
+    PieceColor attackingColor)
+{
+    for (int testRow = 0;
+        testRow < BOARD_SIZE;
+        testRow++)
+    {
+        for (int testCol = 0;
+            testCol < BOARD_SIZE;
+            testCol++)
+        {
+            Piece piece =
+                board[testRow][testCol];
+
+            if (piece.type == EMPTY)
+                continue;
+
+            if (piece.color != attackingColor)
+                continue;
+
+            if (PieceAttacksSquare(
+                testRow,
+                testCol,
+                row,
+                col))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// ============================================================
+// KING DETECTION
+// ============================================================
+
+bool FindKing(
+    PieceColor color,
+    int& kingRow,
+    int& kingCol)
+{
+    for (int row = 0;
+        row < BOARD_SIZE;
+        row++)
+    {
+        for (int col = 0;
+            col < BOARD_SIZE;
+            col++)
+        {
+            if (board[row][col].type == KING &&
+                board[row][col].color == color)
+            {
+                kingRow = row;
+                kingCol = col;
+
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// ------------------------------------------------------------
+
+bool IsKingInCheck(PieceColor color)
+{
+    int kingRow = -1;
+    int kingCol = -1;
+
+    if (!FindKing(
+        color,
+        kingRow,
+        kingCol))
+    {
+        return false;
+    }
+
+    return IsSquareAttacked(
+        kingRow,
+        kingCol,
+        OppositeColor(color)
+    );
+}
+
+// ============================================================
+// CASTLING
+// ============================================================
+
+bool CanCastle(
+    PieceColor color,
+    bool kingSide)
+{
+    int row =
+        color == WHITE_SIDE
+        ? 7
+        : 0;
+
+    Piece king =
+        board[row][4];
+
+    if (king.type != KING ||
+        king.color != color ||
+        king.hasMoved)
+    {
+        return false;
+    }
+
+    // Can't castle while already in check
+    if (IsKingInCheck(color))
+    {
+        return false;
+    }
+
+    PieceColor enemy =
+        OppositeColor(color);
+
+    if (kingSide)
+    {
+        Piece rook =
+            board[row][7];
+
+        if (rook.type != ROOK ||
+            rook.color != color ||
+            rook.hasMoved)
+        {
+            return false;
+        }
+
+        // Squares between King and rook
+        if (board[row][5].type != EMPTY ||
+            board[row][6].type != EMPTY)
+        {
+            return false;
+        }
+
+        // King cannot cross or land on attacked squares
+        if (IsSquareAttacked(
+            row,
+            5,
+            enemy) ||
+            IsSquareAttacked(
+                row,
+                6,
+                enemy))
+        {
+            return false;
+        }
+
+        return true;
+    }
+    else
+    {
+        Piece rook =
+            board[row][0];
+
+        if (rook.type != ROOK ||
+            rook.color != color ||
+            rook.hasMoved)
+        {
+            return false;
+        }
+
+        if (board[row][1].type != EMPTY ||
+            board[row][2].type != EMPTY ||
+            board[row][3].type != EMPTY)
+        {
+            return false;
+        }
+
+        if (IsSquareAttacked(
+            row,
+            3,
+            enemy) ||
+            IsSquareAttacked(
+                row,
+                2,
+                enemy))
+        {
+            return false;
+        }
+
+        return true;
+    }
+}
+
+// ============================================================
+// PSEUDO-LEGAL PIECE MOVEMENT
+// ============================================================
+
+bool IsPawnPseudoLegal(
     int startRow,
     int startCol,
     int endRow,
@@ -363,12 +720,15 @@ bool IsPawnMoveLegal(
     Piece piece =
         board[startRow][startCol];
 
-    int direction;
+    int direction =
+        piece.color == WHITE_SIDE
+        ? -1
+        : 1;
 
-    if (piece.color == WHITE_SIDE)
-        direction = -1;
-    else
-        direction = 1;
+    int startingRow =
+        piece.color == WHITE_SIDE
+        ? 6
+        : 1;
 
     int rowDifference =
         endRow - startRow;
@@ -376,51 +736,82 @@ bool IsPawnMoveLegal(
     int colDifference =
         endCol - startCol;
 
-    // One square forward
-    if (colDifference == 0)
+    // --------------------------------------------------------
+    // ONE SQUARE FORWARD
+    // --------------------------------------------------------
+
+    if (colDifference == 0 &&
+        rowDifference == direction &&
+        board[endRow][endCol].type == EMPTY)
     {
-        if (rowDifference == direction &&
-            board[endRow][endCol].type == EMPTY)
+        return true;
+    }
+
+    // --------------------------------------------------------
+    // TWO SQUARES FROM STARTING RANK
+    // --------------------------------------------------------
+
+    if (colDifference == 0 &&
+        startRow == startingRow &&
+        !piece.hasMoved &&
+        rowDifference == direction * 2 &&
+        board[endRow][endCol].type == EMPTY)
+    {
+        int middleRow =
+            startRow + direction;
+
+        if (board[middleRow][startCol].type ==
+            EMPTY)
+        {
+            return true;
+        }
+    }
+
+    // --------------------------------------------------------
+    // NORMAL CAPTURE
+    // --------------------------------------------------------
+
+    if (std::abs(colDifference) == 1 &&
+        rowDifference == direction)
+    {
+        Piece destination =
+            board[endRow][endCol];
+
+        if (destination.type != EMPTY &&
+            destination.color != piece.color &&
+            destination.type != KING)
         {
             return true;
         }
 
-        // Two squares on first move
-        if (!piece.hasMoved &&
-            rowDifference == direction * 2 &&
-            board[endRow][endCol].type == EMPTY)
-        {
-            int middleRow =
-                startRow + direction;
+        // ----------------------------------------------------
+        // EN PASSANT
+        // ----------------------------------------------------
 
-            if (board[middleRow][startCol].type ==
-                EMPTY)
+        if (destination.type == EMPTY &&
+            endRow == enPassantRow &&
+            endCol == enPassantCol)
+        {
+            int capturedPawnRow =
+                endRow - direction;
+
+            Piece capturedPawn =
+                board[capturedPawnRow][endCol];
+
+            if (capturedPawn.type == PAWN &&
+                capturedPawn.color != piece.color)
             {
                 return true;
             }
         }
     }
 
-    // Capture
-    if (std::abs(colDifference) == 1 &&
-        rowDifference == direction)
-    {
-        if (board[endRow][endCol].type != EMPTY &&
-            board[endRow][endCol].color !=
-            piece.color)
-        {
-            return true;
-        }
-    }
-
     return false;
 }
 
-// ============================================================
-// ROOK
-// ============================================================
+// ------------------------------------------------------------
 
-bool IsRookMoveLegal(
+bool IsRookPseudoLegal(
     int startRow,
     int startCol,
     int endRow,
@@ -440,11 +831,9 @@ bool IsRookMoveLegal(
     );
 }
 
-// ============================================================
-// KNIGHT
-// ============================================================
+// ------------------------------------------------------------
 
-bool IsKnightMoveLegal(
+bool IsKnightPseudoLegal(
     int startRow,
     int startCol,
     int endRow,
@@ -464,11 +853,9 @@ bool IsKnightMoveLegal(
             colDifference == 2);
 }
 
-// ============================================================
-// BISHOP
-// ============================================================
+// ------------------------------------------------------------
 
-bool IsBishopMoveLegal(
+bool IsBishopPseudoLegal(
     int startRow,
     int startCol,
     int endRow,
@@ -493,11 +880,9 @@ bool IsBishopMoveLegal(
     );
 }
 
-// ============================================================
-// QUEEN
-// ============================================================
+// ------------------------------------------------------------
 
-bool IsQueenMoveLegal(
+bool IsQueenPseudoLegal(
     int startRow,
     int startCol,
     int endRow,
@@ -511,7 +896,8 @@ bool IsQueenMoveLegal(
         std::abs(endRow - startRow) ==
         std::abs(endCol - startCol);
 
-    if (!straight && !diagonal)
+    if (!straight &&
+        !diagonal)
     {
         return false;
     }
@@ -524,31 +910,72 @@ bool IsQueenMoveLegal(
     );
 }
 
-// ============================================================
-// KING
-// ============================================================
+// ------------------------------------------------------------
 
-bool IsKingMoveLegal(
+bool IsKingPseudoLegal(
     int startRow,
     int startCol,
     int endRow,
     int endCol)
 {
+    Piece king =
+        board[startRow][startCol];
+
     int rowDifference =
         std::abs(endRow - startRow);
 
     int colDifference =
         std::abs(endCol - startCol);
 
-    return rowDifference <= 1 &&
-        colDifference <= 1;
+    // Normal king movement
+    if (rowDifference <= 1 &&
+        colDifference <= 1 &&
+        !(rowDifference == 0 &&
+            colDifference == 0))
+    {
+        return true;
+    }
+
+    // --------------------------------------------------------
+    // CASTLING
+    // --------------------------------------------------------
+
+    int homeRow =
+        king.color == WHITE_SIDE
+        ? 7
+        : 0;
+
+    if (startRow == homeRow &&
+        startCol == 4 &&
+        endRow == homeRow)
+    {
+        // King-side castle
+        if (endCol == 6)
+        {
+            return CanCastle(
+                king.color,
+                true
+            );
+        }
+
+        // Queen-side castle
+        if (endCol == 2)
+        {
+            return CanCastle(
+                king.color,
+                false
+            );
+        }
+    }
+
+    return false;
 }
 
 // ============================================================
-// MASTER MOVE CHECK
+// MASTER PSEUDO-LEGAL CHECK
 // ============================================================
 
-bool IsMoveLegal(
+bool IsPseudoLegalMove(
     int startRow,
     int startCol,
     int endRow,
@@ -585,10 +1012,14 @@ bool IsMoveLegal(
         return false;
     }
 
-    // Cannot capture own pieces
     if (destination.type != EMPTY &&
-        destination.color ==
-        movingPiece.color)
+        destination.color == movingPiece.color)
+    {
+        return false;
+    }
+
+    // Kings cannot be captured
+    if (destination.type == KING)
     {
         return false;
     }
@@ -597,7 +1028,7 @@ bool IsMoveLegal(
     {
     case PAWN:
 
-        return IsPawnMoveLegal(
+        return IsPawnPseudoLegal(
             startRow,
             startCol,
             endRow,
@@ -606,7 +1037,7 @@ bool IsMoveLegal(
 
     case ROOK:
 
-        return IsRookMoveLegal(
+        return IsRookPseudoLegal(
             startRow,
             startCol,
             endRow,
@@ -615,7 +1046,7 @@ bool IsMoveLegal(
 
     case KNIGHT:
 
-        return IsKnightMoveLegal(
+        return IsKnightPseudoLegal(
             startRow,
             startCol,
             endRow,
@@ -624,7 +1055,7 @@ bool IsMoveLegal(
 
     case BISHOP:
 
-        return IsBishopMoveLegal(
+        return IsBishopPseudoLegal(
             startRow,
             startCol,
             endRow,
@@ -633,7 +1064,7 @@ bool IsMoveLegal(
 
     case QUEEN:
 
-        return IsQueenMoveLegal(
+        return IsQueenPseudoLegal(
             startRow,
             startCol,
             endRow,
@@ -642,7 +1073,7 @@ bool IsMoveLegal(
 
     case KING:
 
-        return IsKingMoveLegal(
+        return IsKingPseudoLegal(
             startRow,
             startCol,
             endRow,
@@ -653,6 +1084,153 @@ bool IsMoveLegal(
 
         return false;
     }
+}
+
+// ============================================================
+// REAL LEGAL MOVE CHECK
+//
+// Temporarily performs the move, including en passant and
+// castling, then checks whether our own King would be attacked.
+// ============================================================
+
+bool IsMoveLegal(
+    int startRow,
+    int startCol,
+    int endRow,
+    int endCol)
+{
+    if (!IsPseudoLegalMove(
+        startRow,
+        startCol,
+        endRow,
+        endCol))
+    {
+        return false;
+    }
+
+    Piece movingPiece =
+        board[startRow][startCol];
+
+    Piece destinationPiece =
+        board[endRow][endCol];
+
+    bool enPassantMove = false;
+    Piece enPassantCapturedPiece = {};
+    int enPassantCapturedRow = -1;
+
+    bool castlingMove = false;
+    Piece rookPiece = {};
+    Piece rookDestinationPiece = {};
+    int rookStartCol = -1;
+    int rookEndCol = -1;
+
+    // --------------------------------------------------------
+    // DETECT EN PASSANT
+    // --------------------------------------------------------
+
+    if (movingPiece.type == PAWN &&
+        startCol != endCol &&
+        destinationPiece.type == EMPTY &&
+        endRow == enPassantRow &&
+        endCol == enPassantCol)
+    {
+        int direction =
+            movingPiece.color == WHITE_SIDE
+            ? -1
+            : 1;
+
+        enPassantCapturedRow =
+            endRow - direction;
+
+        enPassantCapturedPiece =
+            board[enPassantCapturedRow][endCol];
+
+        enPassantMove = true;
+    }
+
+    // --------------------------------------------------------
+    // DETECT CASTLING
+    // --------------------------------------------------------
+
+    if (movingPiece.type == KING &&
+        std::abs(endCol - startCol) == 2)
+    {
+        castlingMove = true;
+
+        if (endCol == 6)
+        {
+            rookStartCol = 7;
+            rookEndCol = 5;
+        }
+        else
+        {
+            rookStartCol = 0;
+            rookEndCol = 3;
+        }
+
+        rookPiece =
+            board[startRow][rookStartCol];
+
+        rookDestinationPiece =
+            board[startRow][rookEndCol];
+    }
+
+    // --------------------------------------------------------
+    // TEMPORARILY MAKE MOVE
+    // --------------------------------------------------------
+
+    board[endRow][endCol] =
+        movingPiece;
+
+    board[startRow][startCol] =
+    {};
+
+    if (enPassantMove)
+    {
+        board[enPassantCapturedRow][endCol] =
+        {};
+    }
+
+    if (castlingMove)
+    {
+        board[startRow][rookEndCol] =
+            rookPiece;
+
+        board[startRow][rookStartCol] =
+        {};
+    }
+
+    bool kingInCheck =
+        IsKingInCheck(
+            movingPiece.color
+        );
+
+    // --------------------------------------------------------
+    // RESTORE EVERYTHING
+    // --------------------------------------------------------
+
+    board[startRow][startCol] =
+        movingPiece;
+
+    board[endRow][endCol] =
+        destinationPiece;
+
+    if (enPassantMove)
+    {
+        board[enPassantCapturedRow][endCol] =
+            enPassantCapturedPiece;
+    }
+
+    if (castlingMove)
+    {
+        board[startRow][rookStartCol] =
+            rookPiece;
+
+        board[startRow][rookEndCol] =
+            rookDestinationPiece;
+    }
+
+    return !kingInCheck;
 }
 
 // ============================================================
@@ -690,6 +1268,8 @@ void GenerateLegalMoves(
     }
 }
 
+// ------------------------------------------------------------
+
 bool IsHighlightedMove(
     int row,
     int col)
@@ -708,6 +1288,152 @@ bool IsHighlightedMove(
 }
 
 // ============================================================
+// UX: CAN THIS PIECE SAVE THE KING?
+//
+// When the current player is in check, this lets us highlight
+// every friendly piece that has at least one legal response.
+// ============================================================
+
+bool PieceHasLegalMove(
+    int row,
+    int col)
+{
+    Piece piece =
+        board[row][col];
+
+    if (piece.type == EMPTY)
+    {
+        return false;
+    }
+
+    for (int targetRow = 0;
+        targetRow < BOARD_SIZE;
+        targetRow++)
+    {
+        for (int targetCol = 0;
+            targetCol < BOARD_SIZE;
+            targetCol++)
+        {
+            if (IsMoveLegal(
+                row,
+                col,
+                targetRow,
+                targetCol))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// ------------------------------------------------------------
+
+bool HasAnyLegalMove(PieceColor color)
+{
+    for (int row = 0;
+        row < BOARD_SIZE;
+        row++)
+    {
+        for (int col = 0;
+            col < BOARD_SIZE;
+            col++)
+        {
+            Piece piece =
+                board[row][col];
+
+            if (piece.type == EMPTY ||
+                piece.color != color)
+            {
+                continue;
+            }
+
+            if (PieceHasLegalMove(
+                row,
+                col))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// ============================================================
+// GAME STATE
+// ============================================================
+
+void EvaluateGameState()
+{
+    bool inCheck =
+        IsKingInCheck(currentTurn);
+
+    bool hasMove =
+        HasAnyLegalMove(currentTurn);
+
+    if (inCheck &&
+        !hasMove)
+    {
+        gameOver = true;
+        stalemate = false;
+
+        winner =
+            OppositeColor(currentTurn);
+
+        lastMove += " #";
+
+        return;
+    }
+
+    if (!inCheck &&
+        !hasMove)
+    {
+        gameOver = true;
+        stalemate = true;
+
+        winner = NONE;
+
+        return;
+    }
+
+    if (inCheck)
+    {
+        lastMove += " +";
+    }
+}
+
+// ============================================================
+// FINISH TURN
+// ============================================================
+
+void FinishTurn()
+{
+    if (currentTurn == WHITE_SIDE)
+    {
+        currentTurn =
+            BLACK_SIDE;
+    }
+    else
+    {
+        currentTurn =
+            WHITE_SIDE;
+
+        moveNumber++;
+    }
+
+    pieceSelected = false;
+
+    selectedRow = -1;
+    selectedCol = -1;
+
+    legalMoves.clear();
+
+    EvaluateGameState();
+}
+
+// ============================================================
 // MOVE PIECE
 // ============================================================
 
@@ -722,6 +1448,9 @@ void MovePiece(
 
     Piece capturedPiece =
         board[endRow][endCol];
+
+    bool isEnPassant = false;
+    bool isCastling = false;
 
     std::string from =
         GetSquareName(
@@ -745,7 +1474,42 @@ void MovePiece(
         + to;
 
     // ========================================================
-    // CAPTURE
+    // EN PASSANT CAPTURE
+    // ========================================================
+
+    if (movingPiece.type == PAWN &&
+        startCol != endCol &&
+        capturedPiece.type == EMPTY &&
+        endRow == enPassantRow &&
+        endCol == enPassantCol)
+    {
+        int direction =
+            movingPiece.color == WHITE_SIDE
+            ? -1
+            : 1;
+
+        int capturedPawnRow =
+            endRow - direction;
+
+        Piece capturedPawn =
+            board[capturedPawnRow][endCol];
+
+        if (capturedPawn.type == PAWN &&
+            capturedPawn.color !=
+            movingPiece.color)
+        {
+            board[capturedPawnRow][endCol] =
+            {};
+
+            isEnPassant = true;
+
+            lastMove +=
+                " en passant";
+        }
+    }
+
+    // ========================================================
+    // NORMAL CAPTURE TEXT
     // ========================================================
 
     if (capturedPiece.type != EMPTY)
@@ -758,7 +1522,17 @@ void MovePiece(
     }
 
     // ========================================================
-    // MOVE IT
+    // DETECT CASTLING
+    // ========================================================
+
+    if (movingPiece.type == KING &&
+        std::abs(endCol - startCol) == 2)
+    {
+        isCastling = true;
+    }
+
+    // ========================================================
+    // MOVE PIECE
     // ========================================================
 
     board[endRow][endCol] =
@@ -767,67 +1541,124 @@ void MovePiece(
     board[endRow][endCol].hasMoved =
         true;
 
-    board[startRow][startCol] = {};
+    board[startRow][startCol] =
+    {};
+
+    // ========================================================
+    // MOVE ROOK DURING CASTLING
+    // ========================================================
+
+    if (isCastling)
+    {
+        if (endCol == 6)
+        {
+            board[endRow][5] =
+                board[endRow][7];
+
+            board[endRow][5].hasMoved =
+                true;
+
+            board[endRow][7] =
+            {};
+
+            lastMove +=
+                " O-O";
+        }
+        else
+        {
+            board[endRow][3] =
+                board[endRow][0];
+
+            board[endRow][3].hasMoved =
+                true;
+
+            board[endRow][0] =
+            {};
+
+            lastMove +=
+                " O-O-O";
+        }
+    }
+
+    // ========================================================
+    // UPDATE EN PASSANT TARGET
+    //
+    // It is only valid for the opponent's NEXT move.
+    // ========================================================
+
+    enPassantRow = -1;
+    enPassantCol = -1;
+
+    if (movingPiece.type == PAWN &&
+        std::abs(endRow - startRow) == 2)
+    {
+        enPassantRow =
+            (startRow + endRow) / 2;
+
+        enPassantCol =
+            startCol;
+    }
 
     // ========================================================
     // PROMOTION
     // ========================================================
 
-    if (board[endRow][endCol].type ==
-        PAWN)
+    if (board[endRow][endCol].type == PAWN &&
+        (endRow == 0 ||
+            endRow == 7))
     {
-        if (endRow == 0 ||
-            endRow == 7)
-        {
-            board[endRow][endCol].type =
-                QUEEN;
+        promotionPending = true;
 
-            lastMove +=
-                " - promoted to Queen";
-        }
-    }
-
-    // ========================================================
-    // DID WE CAPTURE THE KING?
-    // ========================================================
-
-    if (capturedPiece.type == KING)
-    {
-        gameOver = true;
-        winner = movingPiece.color;
-
-        lastMove += " - VICTORY!";
+        promotionRow = endRow;
+        promotionCol = endCol;
 
         pieceSelected = false;
-        selectedRow = -1;
-        selectedCol = -1;
-
         legalMoves.clear();
+
+        lastMove +=
+            " promotes...";
 
         return;
     }
 
-    // ========================================================
-    // CHANGE TURN
-    // ========================================================
+    FinishTurn();
+}
 
-    if (currentTurn == WHITE_SIDE)
+// ============================================================
+// PROMOTION
+// ============================================================
+
+void PromotePawn(PieceType type)
+{
+    if (!promotionPending)
     {
-        currentTurn = BLACK_SIDE;
+        return;
     }
-    else
+
+    if (type != QUEEN &&
+        type != ROOK &&
+        type != BISHOP &&
+        type != KNIGHT)
     {
-        currentTurn = WHITE_SIDE;
-
-        moveNumber++;
+        return;
     }
 
-    pieceSelected = false;
+    board[promotionRow][promotionCol].type =
+        type;
 
-    selectedRow = -1;
-    selectedCol = -1;
+    board[promotionRow][promotionCol].hasMoved =
+        true;
 
-    legalMoves.clear();
+    lastMove =
+        "Pawn promoted to "
+        + GetChessPieceName(type);
+
+    promotionPending = false;
+
+    promotionRow = -1;
+    promotionCol = -1;
+
+    FinishTurn();
 }
 
 // ============================================================
@@ -895,8 +1726,9 @@ Texture2D GetPieceTexture(
     return {};
 }
 
-void SetTexturePixelMode(
-    Texture2D texture)
+// ------------------------------------------------------------
+
+void SetTexturePixelMode(Texture2D texture)
 {
     SetTextureFilter(
         texture,
@@ -968,7 +1800,7 @@ void DrawPieceTexture(
 }
 
 // ============================================================
-// PIECE LABELS
+// PIECE LABEL
 // ============================================================
 
 void DrawPieceLabel(
@@ -980,11 +1812,6 @@ void DrawPieceLabel(
     {
         return;
     }
-
-    char label =
-        GetPieceLetter(
-            piece.type
-        );
 
     Color badgeColor;
 
@@ -1019,7 +1846,7 @@ void DrawPieceLabel(
     DrawText(
         TextFormat(
             "%c",
-            label
+            GetPieceLetter(piece.type)
         ),
         x + 8,
         y + 5,
@@ -1029,7 +1856,7 @@ void DrawPieceLabel(
 }
 
 // ============================================================
-// BOARD
+// DRAW BOARD
 // ============================================================
 
 void DrawBoard(
@@ -1075,6 +1902,18 @@ void DrawBoard(
         255
     };
 
+    Color saveKingHighlight =
+    {
+        40,
+        220,
+        220,
+        255
+    };
+
+    bool currentPlayerInCheck =
+        !gameOver &&
+        IsKingInCheck(currentTurn);
+
     for (int row = 0;
         row < BOARD_SIZE;
         row++)
@@ -1109,7 +1948,10 @@ void DrawBoard(
                 : darkSquare
             );
 
-            // Selected square
+            // ------------------------------------------------
+            // SELECTED
+            // ------------------------------------------------
+
             if (pieceSelected &&
                 row == selectedRow &&
                 col == selectedCol)
@@ -1120,7 +1962,10 @@ void DrawBoard(
                 );
             }
 
-            // Legal move
+            // ------------------------------------------------
+            // LEGAL MOVE DESTINATIONS
+            // ------------------------------------------------
+
             if (IsHighlightedMove(
                 row,
                 col))
@@ -1157,10 +2002,54 @@ void DrawBoard(
                 x,
                 y
             );
+
+            // ------------------------------------------------
+            // KING IN CHECK
+            // ------------------------------------------------
+
+            if (board[row][col].type == KING &&
+                IsKingInCheck(
+                    board[row][col].color))
+            {
+                DrawRectangleLinesEx(
+                    square,
+                    7,
+                    RED
+                );
+            }
+
+            // ------------------------------------------------
+            // UX:
+            // Highlight friendly pieces capable of responding
+            // to check.
+            // ------------------------------------------------
+
+            if (currentPlayerInCheck &&
+                board[row][col].type != EMPTY &&
+                board[row][col].color ==
+                currentTurn &&
+                PieceHasLegalMove(
+                    row,
+                    col))
+            {
+                DrawRectangleLinesEx(
+                    {
+                        (float)x + 5,
+                        (float)y + 5,
+                        TILE_SIZE - 10.0f,
+                        TILE_SIZE - 10.0f
+                    },
+                    4,
+                    saveKingHighlight
+                );
+            }
         }
     }
 
-    // File letters
+    // ========================================================
+    // FILE LETTERS
+    // ========================================================
+
     for (int col = 0;
         col < BOARD_SIZE;
         col++)
@@ -1185,7 +2074,10 @@ void DrawBoard(
         );
     }
 
-    // Rank numbers
+    // ========================================================
+    // RANK NUMBERS
+    // ========================================================
+
     for (int row = 0;
         row < BOARD_SIZE;
         row++)
@@ -1288,7 +2180,7 @@ void DrawSidePanel()
     );
 
     // ========================================================
-    // TURN / WINNER
+    // GAME STATUS
     // ========================================================
 
     if (!gameOver)
@@ -1301,27 +2193,20 @@ void DrawSidePanel()
             GRAY
         );
 
-        if (currentTurn ==
-            WHITE_SIDE)
-        {
-            DrawText(
-                "WHITE",
-                panelX,
-                165,
-                26,
-                RAYWHITE
-            );
-        }
-        else
-        {
-            DrawText(
-                "BLACK",
-                panelX,
-                165,
-                26,
-                RED
-            );
-        }
+        Color turnColor =
+            currentTurn == WHITE_SIDE
+            ? RAYWHITE
+            : RED;
+
+        DrawText(
+            GetColorName(
+                currentTurn
+            ),
+            panelX,
+            165,
+            26,
+            turnColor
+        );
 
         DrawText(
             TextFormat(
@@ -1333,37 +2218,73 @@ void DrawSidePanel()
             18,
             LIGHTGRAY
         );
+
+        if (IsKingInCheck(
+            currentTurn))
+        {
+            DrawText(
+                "CHECK!",
+                panelX + 100,
+                165,
+                26,
+                RED
+            );
+
+            DrawText(
+                "Cyan = can save King",
+                panelX,
+                215,
+                14,
+                SKYBLUE
+            );
+        }
     }
     else
     {
-        DrawText(
-            "WINNER",
-            panelX,
-            140,
-            18,
-            GRAY
-        );
+        if (stalemate)
+        {
+            DrawText(
+                "STALEMATE",
+                panelX,
+                150,
+                27,
+                GOLD
+            );
 
-        Color winnerColor =
-            winner == WHITE_SIDE
-            ? RAYWHITE
-            : RED;
+            DrawText(
+                "DRAW",
+                panelX,
+                185,
+                22,
+                LIGHTGRAY
+            );
+        }
+        else
+        {
+            DrawText(
+                "CHECKMATE",
+                panelX,
+                145,
+                27,
+                GOLD
+            );
 
-        DrawText(
-            GetColorName(winner),
-            panelX,
-            165,
-            28,
-            winnerColor
-        );
+            Color winnerColor =
+                winner == WHITE_SIDE
+                ? RAYWHITE
+                : RED;
 
-        DrawText(
-            "THE KING HAS FALLEN",
-            panelX,
-            200,
-            16,
-            GOLD
-        );
+            DrawText(
+                TextFormat(
+                    "%s WINS",
+                    GetColorName(winner)
+                ),
+                panelX,
+                180,
+                24,
+                winnerColor
+            );
+        }
     }
 
     // ========================================================
@@ -1372,16 +2293,16 @@ void DrawSidePanel()
 
     DrawLine(
         panelX,
-        230,
+        245,
         SCREEN_WIDTH - 25,
-        230,
+        245,
         DARKGRAY
     );
 
     DrawText(
         "SELECTED",
         panelX,
-        250,
+        260,
         17,
         GRAY
     );
@@ -1391,52 +2312,72 @@ void DrawSidePanel()
         Piece piece =
             board[selectedRow][selectedCol];
 
-        std::string chessName =
+        DrawText(
             GetChessPieceName(
                 piece.type
-            );
-
-        std::string underwearName =
-            GetPieceName(
-                piece.type
-            );
-
-        std::string square =
-            GetSquareName(
-                selectedRow,
-                selectedCol
-            );
-
-        DrawText(
-            chessName.c_str(),
+            ).c_str(),
             panelX,
-            275,
+            285,
             22,
             RAYWHITE
         );
 
         DrawText(
-            underwearName.c_str(),
+            GetPieceName(
+                piece.type
+            ).c_str(),
             panelX,
-            302,
+            312,
             17,
             GOLD
         );
 
         DrawText(
-            square.c_str(),
+            GetSquareName(
+                selectedRow,
+                selectedCol
+            ).c_str(),
             panelX,
-            327,
+            337,
             17,
             LIGHTGRAY
         );
+
+        // ----------------------------------------------------
+        // NEW UX:
+        // Explicitly tell player when this piece can't move.
+        // ----------------------------------------------------
+
+        if (legalMoves.empty())
+        {
+            DrawText(
+                "NO LEGAL MOVES",
+                panelX,
+                362,
+                16,
+                RED
+            );
+        }
+        else
+        {
+            DrawText(
+                TextFormat(
+                    "%i legal moves",
+                    (int)legalMoves.size()
+                ),
+                panelX,
+                362,
+                15,
+                LIGHTGRAY
+            );
+        }
     }
     else
     {
         DrawText(
             "None",
             panelX,
-            280,
+            290,
             20,
             DARKGRAY
         );
@@ -1448,16 +2389,16 @@ void DrawSidePanel()
 
     DrawLine(
         panelX,
-        360,
+        395,
         SCREEN_WIDTH - 25,
-        360,
+        395,
         DARKGRAY
     );
 
     DrawText(
         "LAST MOVE",
         panelX,
-        380,
+        410,
         17,
         GRAY
     );
@@ -1465,7 +2406,7 @@ void DrawSidePanel()
     DrawText(
         lastMove.c_str(),
         panelX,
-        405,
+        435,
         15,
         LIGHTGRAY
     );
@@ -1476,23 +2417,23 @@ void DrawSidePanel()
 
     DrawLine(
         panelX,
-        445,
+        470,
         SCREEN_WIDTH - 25,
-        445,
+        470,
         DARKGRAY
     );
 
     DrawText(
         "THE UNDERWEAR ARMY",
         panelX,
-        465,
+        485,
         18,
         RAYWHITE
     );
 
     DrawLegendLine(
         panelX,
-        495,
+        515,
         "P",
         "Briefs",
         "Pawn"
@@ -1500,7 +2441,7 @@ void DrawSidePanel()
 
     DrawLegendLine(
         panelX,
-        535,
+        552,
         "R",
         "Long Sock",
         "Rook"
@@ -1508,7 +2449,7 @@ void DrawSidePanel()
 
     DrawLegendLine(
         panelX,
-        575,
+        589,
         "N",
         "Short Sock",
         "Knight"
@@ -1516,7 +2457,7 @@ void DrawSidePanel()
 
     DrawLegendLine(
         panelX,
-        615,
+        626,
         "B",
         "Jock",
         "Bishop"
@@ -1524,7 +2465,7 @@ void DrawSidePanel()
 
     DrawLegendLine(
         panelX,
-        655,
+        663,
         "Q",
         "Boxers",
         "Queen"
@@ -1532,7 +2473,7 @@ void DrawSidePanel()
 
     DrawLegendLine(
         panelX,
-        695,
+        700,
         "K",
         "Boxer Briefs",
         "King"
@@ -1548,17 +2489,117 @@ void DrawSidePanel()
 }
 
 // ============================================================
-// VICTORY SCREEN
+// PROMOTION SCREEN
 // ============================================================
 
-void DrawVictoryScreen()
+void DrawPromotionScreen()
+{
+    if (!promotionPending)
+    {
+        return;
+    }
+
+    DrawRectangle(
+        0,
+        0,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT,
+        Color{
+            0,
+            0,
+            0,
+            190
+        }
+    );
+
+    const char* title =
+        "PROMOTION!";
+
+    int titleSize = 52;
+
+    int titleWidth =
+        MeasureText(
+            title,
+            titleSize
+        );
+
+    DrawText(
+        title,
+        SCREEN_WIDTH / 2 -
+        titleWidth / 2,
+        245,
+        titleSize,
+        GOLD
+    );
+
+    const char* subtitle =
+        "THE BRIEFS HAVE ASCENDED";
+
+    int subtitleSize = 22;
+
+    int subtitleWidth =
+        MeasureText(
+            subtitle,
+            subtitleSize
+        );
+
+    DrawText(
+        subtitle,
+        SCREEN_WIDTH / 2 -
+        subtitleWidth / 2,
+        315,
+        subtitleSize,
+        RAYWHITE
+    );
+
+    const char* choices =
+        "Q = Boxers     R = Long Sock";
+
+    int choicesWidth =
+        MeasureText(
+            choices,
+            21
+        );
+
+    DrawText(
+        choices,
+        SCREEN_WIDTH / 2 -
+        choicesWidth / 2,
+        375,
+        21,
+        LIGHTGRAY
+    );
+
+    const char* choices2 =
+        "B = Jock       N = Short Sock";
+
+    int choicesWidth2 =
+        MeasureText(
+            choices2,
+            21
+        );
+
+    DrawText(
+        choices2,
+        SCREEN_WIDTH / 2 -
+        choicesWidth2 / 2,
+        415,
+        21,
+        LIGHTGRAY
+    );
+}
+
+// ============================================================
+// END GAME SCREEN
+// ============================================================
+
+void DrawEndGameScreen()
 {
     if (!gameOver)
     {
         return;
     }
 
-    // Dark overlay
     DrawRectangle(
         0,
         0,
@@ -1572,74 +2613,132 @@ void DrawVictoryScreen()
         }
     );
 
-    const char* winnerText;
-
-    if (winner == WHITE_SIDE)
+    if (stalemate)
     {
-        winnerText =
-            "WHITE WINS!";
+        const char* title =
+            "STALEMATE";
+
+        int titleSize = 58;
+
+        int titleWidth =
+            MeasureText(
+                title,
+                titleSize
+            );
+
+        DrawText(
+            title,
+            SCREEN_WIDTH / 2 -
+            titleWidth / 2,
+            280,
+            titleSize,
+            GOLD
+        );
+
+        const char* subtitle =
+            "THE UNDERWEAR WAR ENDS IN A DRAW";
+
+        int subtitleSize = 22;
+
+        int subtitleWidth =
+            MeasureText(
+                subtitle,
+                subtitleSize
+            );
+
+        DrawText(
+            subtitle,
+            SCREEN_WIDTH / 2 -
+            subtitleWidth / 2,
+            355,
+            subtitleSize,
+            RAYWHITE
+        );
     }
     else
     {
-        winnerText =
-            "BLACK WINS!";
+        std::string title =
+            std::string(
+                GetColorName(winner)
+            )
+            + " WINS!";
+
+        int titleSize = 58;
+
+        int titleWidth =
+            MeasureText(
+                title.c_str(),
+                titleSize
+            );
+
+        DrawText(
+            title.c_str(),
+            SCREEN_WIDTH / 2 -
+            titleWidth / 2,
+            270,
+            titleSize,
+            GOLD
+        );
+
+        const char* checkmateText =
+            "CHECKMATE";
+
+        int checkmateSize = 32;
+
+        int checkmateWidth =
+            MeasureText(
+                checkmateText,
+                checkmateSize
+            );
+
+        DrawText(
+            checkmateText,
+            SCREEN_WIDTH / 2 -
+            checkmateWidth / 2,
+            345,
+            checkmateSize,
+            RAYWHITE
+        );
+
+        const char* underwearText =
+            "THE BOXER BRIEFS HAVE BEEN DEFEATED";
+
+        int underwearSize = 20;
+
+        int underwearWidth =
+            MeasureText(
+                underwearText,
+                underwearSize
+            );
+
+        DrawText(
+            underwearText,
+            SCREEN_WIDTH / 2 -
+            underwearWidth / 2,
+            395,
+            underwearSize,
+            LIGHTGRAY
+        );
     }
-
-    int winnerFontSize = 58;
-
-    int winnerWidth =
-        MeasureText(
-            winnerText,
-            winnerFontSize
-        );
-
-    DrawText(
-        winnerText,
-        SCREEN_WIDTH / 2 -
-        winnerWidth / 2,
-        280,
-        winnerFontSize,
-        GOLD
-    );
-
-    const char* message =
-        "THE BOXER BRIEFS HAVE FALLEN";
-
-    int messageFontSize = 24;
-
-    int messageWidth =
-        MeasureText(
-            message,
-            messageFontSize
-        );
-
-    DrawText(
-        message,
-        SCREEN_WIDTH / 2 -
-        messageWidth / 2,
-        355,
-        messageFontSize,
-        RAYWHITE
-    );
 
     const char* rematch =
         "Press R for a rematch";
 
-    int rematchFontSize = 22;
+    int rematchSize = 22;
 
     int rematchWidth =
         MeasureText(
             rematch,
-            rematchFontSize
+            rematchSize
         );
 
     DrawText(
         rematch,
         SCREEN_WIDTH / 2 -
         rematchWidth / 2,
-        410,
-        rematchFontSize,
-        LIGHTGRAY
+        455,
+        rematchSize,
+        GRAY
     );
 }
 
@@ -1647,15 +2746,64 @@ void DrawVictoryScreen()
 // INPUT
 // ============================================================
 
-void HandleMouseInput()
+void HandleInput()
 {
-    // No movement once somebody wins
+    // ========================================================
+    // RESET
+    // ========================================================
+
+    if (IsKeyPressed(KEY_R))
+    {
+        ResetGame();
+        return;
+    }
+
+    // ========================================================
+    // GAME OVER
+    // ========================================================
+
     if (gameOver)
     {
         return;
     }
 
-    // Right-click cancels selection
+    // ========================================================
+    // PROMOTION CHOICE
+    // ========================================================
+
+    if (promotionPending)
+    {
+        if (IsKeyPressed(KEY_Q))
+        {
+            PromotePawn(QUEEN);
+            return;
+        }
+
+        if (IsKeyPressed(KEY_R))
+        {
+            PromotePawn(ROOK);
+            return;
+        }
+
+        if (IsKeyPressed(KEY_B))
+        {
+            PromotePawn(BISHOP);
+            return;
+        }
+
+        if (IsKeyPressed(KEY_N))
+        {
+            PromotePawn(KNIGHT);
+            return;
+        }
+
+        return;
+    }
+
+    // ========================================================
+    // RIGHT CLICK = CANCEL
+    // ========================================================
+
     if (IsMouseButtonPressed(
         MOUSE_BUTTON_RIGHT))
     {
@@ -1678,6 +2826,18 @@ void HandleMouseInput()
     Vector2 mouse =
         GetMousePosition();
 
+    // Important: reject clicks outside the actual board before
+    // converting them to row/column coordinates.
+    if (mouse.x < BOARD_X ||
+        mouse.x >= BOARD_X +
+        BOARD_SIZE * TILE_SIZE ||
+        mouse.y < BOARD_Y ||
+        mouse.y >= BOARD_Y +
+        BOARD_SIZE * TILE_SIZE)
+    {
+        return;
+    }
+
     int col =
         (int)(
             (mouse.x - BOARD_X)
@@ -1689,13 +2849,6 @@ void HandleMouseInput()
             (mouse.y - BOARD_Y)
             / TILE_SIZE
             );
-
-    if (!IsInsideBoard(
-        row,
-        col))
-    {
-        return;
-    }
 
     Piece clickedPiece =
         board[row][col];
@@ -1725,7 +2878,7 @@ void HandleMouseInput()
     }
 
     // ========================================================
-    // CHANGE SELECTION
+    // SELECT DIFFERENT FRIENDLY PIECE
     // ========================================================
 
     if (clickedPiece.type != EMPTY &&
@@ -1847,7 +3000,7 @@ int main()
         );
 
     // ========================================================
-    // PIXEL FILTERING
+    // CRISP PIXEL ART
     // ========================================================
 
     SetTexturePixelMode(
@@ -1906,12 +3059,7 @@ int main()
 
     while (!WindowShouldClose())
     {
-        HandleMouseInput();
-
-        if (IsKeyPressed(KEY_R))
-        {
-            ResetGame();
-        }
+        HandleInput();
 
         BeginDrawing();
 
@@ -1930,7 +3078,9 @@ int main()
 
         DrawSidePanel();
 
-        DrawVictoryScreen();
+        DrawPromotionScreen();
+
+        DrawEndGameScreen();
 
         EndDrawing();
     }
