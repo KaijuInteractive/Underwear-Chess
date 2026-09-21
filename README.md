@@ -4,7 +4,7 @@ A fully playable chess game where the pieces have finally put some clothes on.
 
 **Undies Chess** is a C++ chess game built with [raylib](https://www.raylib.com/) and developed by Kaiju Interactive. It replaces traditional chess pieces with underwear-themed sprites while retaining the rules and strategy of chess.
 
-![Undies Chess gameplay showing a match against the Jocked AI](docs/undies-chess-gameplay.png)
+![Undies Chess gameplay showing a match against the Jocked AI](undies-chess-gameplay.png)
 
 ## 🎮 Features
 
