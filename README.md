@@ -11,10 +11,12 @@ A fully playable chess game where the pieces have finally put some clothes on.
 - Complete playable chess game
 - Player vs. Player mode
 - Player vs. Computer mode
-- Three AI difficulty levels:
+- Five AI difficulty levels:
   - **Loose Fit**
   - **Snug Fit**
   - **Tight Undies**
+  - **Commando**
+  - **Jocked**
 - Custom underwear-themed chess pieces
 - Title screen and graphical interface
 - Legal move validation
