@@ -52,7 +52,7 @@ The project gave me experience implementing chess rules, validating player movem
 
 Undies Chess is available on my itch.io page:
 
-https://kaiju-plays.itch.io/
+https://kaiju-plays.itch.io/undies-chess
 
 ## 👾 About
 
